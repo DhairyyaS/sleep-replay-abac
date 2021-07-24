@@ -8,10 +8,12 @@ import (
 	"flag"
 	"fmt"
 	"github.com/emer/emergent/patgen"
+	"io/ioutil"
 	"log"
 	"math"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -143,14 +145,29 @@ type Sim struct {
 	FirstZero     int     `inactive:"+" desc:"epoch at when SSE first went to zero"`
 	NZero         int     `inactive:"+" desc:"number of epochs in a row with zero SSE"`
 
-	ABZero     bool     `inactive:"+" desc:"AB Testing Zero SSE"`
-	TrainABSSE float64  `inactive:"+" desc:"AB Training SSE"`
-	TrainACSSE float64  `inactive:"+" desc:"AC Training SSE"`
-	TestABSSE  float64  `inactive:"+" desc:"AB Testing SSE"`
-	TestACSSE  float64  `inactive:"+" desc:"AC Testing SSE"`
-	TestNm     string   `desc:"Which Test"`
-	TstStatNms []string `view:"-" desc:"Stats to split between AB, AC"`
-	TestABCor  float64  `inactive:"+" desc:"AB Training Cor"` // For Sleep Thresh
+	ABZero       bool     `inactive:"+" desc:"AB Testing Zero SSE"`
+	ACZero       bool     `inactive:"+" desc:"AC Testing Zero SSE"`
+	TrainABSSE   float64  `inactive:"+" desc:"AB Training SSE"`
+	TrainACSSE   float64  `inactive:"+" desc:"AC Training SSE"`
+	TestABSSE    float64  `inactive:"+" desc:"AB Testing SSE"`
+	TestACSSE    float64  `inactive:"+" desc:"AC Testing SSE"`
+	TestNm       string   `desc:"Which Test"`
+	TstStatNms   []string `view:"-" desc:"Stats to split between AB, AC"`
+	TestABCor    float64  `inactive:"+" desc:"AB Training Cor"` // For Sleep Thresh
+	TestACCor    float64  `inactive:"+" desc:"AC Training Cor"`
+	SleepStage   string   `inactive:"+" desc:"Stage of Sleep being run"`
+	SWSCounter   int      `inactive:"+" desc:"Number of SWS blocks run"`
+	REMCounter   int      `inactive:"+" desc:"Number of REM blocks run"`
+	SleepCounter int      `inactive:"+" desc:"Number Sleep blocks run"`
+
+	ClosestABA      int     `view:"-" desc:"Closest A"`
+	ClosestABAMatch float32 `view:"-" desc:"Closest A Match %"`
+	ClosestABB      int     `view:"-" desc:"Closest B"`
+	ClosestABBMatch float32 `view:"-" desc:"Closest B Match %"`
+	ClosestACA      int     `view:"-" desc:"Closest A''"`
+	ClosestACAMatch float32 `view:"-" desc:"Closest A Match %"`
+	ClosestACC      int     `view:"-" desc:"Closest C"`
+	ClosestACCMatch float32 `view:"-" desc:"Closest B Match %"`
 
 	// internal state - view:"-"
 	SumErr       float64                     `view:"-" inactive:"+" desc:"sum to increment as we go through epoch"`
@@ -181,18 +198,6 @@ type Sim struct {
 	RndSeed      int64                       `view:"-" desc:"the current random seed"`
 	DirSeed      int64                       `view:"-" desc:"the current random seed for dir"`
 	LastEpcTime  time.Time                   `view:"-" desc:"timer for last epoch"`
-
-	ClosestABA      int     `view:"-" desc:"Closest A"`
-	ClosestABAMatch float32 `view:"-" desc:"Closest A Match %"`
-
-	ClosestABB      int     `view:"-" desc:"Closest B"`
-	ClosestABBMatch float32 `view:"-" desc:"Closest B Match %"`
-
-	ClosestACA      int     `view:"-" desc:"Closest A''"`
-	ClosestACAMatch float32 `view:"-" desc:"Closest A Match %"`
-
-	ClosestACC      int     `view:"-" desc:"Closest C"`
-	ClosestACCMatch float32 `view:"-" desc:"Closest B Match %"`
 }
 
 // this registers this Sim Type and gives it properties that e.g.,
@@ -205,7 +210,7 @@ var TheSim Sim
 // New creates new blank elements and initializes defaults
 func (ss *Sim) New() {
 	ss.NewRndSeed()
-	ss.MaxEpcs = 50
+	ss.MaxEpcs = 120
 	ss.MaxRuns = 30
 	ss.Net = &leabra.Network{}
 	ss.Pats = &etable.Table{} // ra25
@@ -226,7 +231,7 @@ func (ss *Sim) New() {
 	ss.TestInterval = 1
 	ss.LogSetParams = false
 	ss.LayStatNms = []string{"Input", "Output"}
-	ss.TrialPerEpc = 9
+	ss.TrialPerEpc = 10
 
 	ss.SlpCycLog = &etable.Table{}
 	ss.Sleep = false
@@ -245,10 +250,18 @@ func (ss *Sim) New() {
 	ss.OscillPeriod = 75.     // in cycles
 	ss.OscillMidline = 1.     // horizontal zero value
 
+	ss.SleepStage = "PreSleep"
+	ss.SleepCounter = 0
+	ss.SWSCounter = 0
+	ss.REMCounter = 0
+
+
+
 	ss.ABZero = false
 	ss.TestNm = "AB"
 	ss.TstNms = []string{"AB", "AC"}
 	ss.TstStatNms = []string{"Err", "SSE", "AvgSSE"}
+
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////
@@ -306,9 +319,9 @@ func (ss *Sim) ConfigNet(net *leabra.Network) {
 
 	net.InitName(net, "sleep-replay-cortical")
 
-	ext := net.AddLayer2D("EXT", 5, 10, emer.Input)
-	inp := net.AddLayer2D("Input", 5, 10, emer.Hidden)
-	out := net.AddLayer2D("Output", 5, 10, emer.Target)
+	ext := net.AddLayer2D("EXT", 10, 12, emer.Input)
+	inp := net.AddLayer2D("Input", 10, 12, emer.Hidden)
+	out := net.AddLayer2D("Output", 10, 12, emer.Target)
 
 	//// DS: Hipocampus!
 	dg := net.AddLayer2D("DG", 15, 15, emer.Hidden)
@@ -329,11 +342,11 @@ func (ss *Sim) ConfigNet(net *leabra.Network) {
 	onetoone := prjn.NewOneToOne()
 
 	spconn := prjn.NewUnifRnd()
-	spconn.PCon = 0.05
+	spconn.PCon = 0.6
 	spconn.RndSeed = ss.RndSeed
 
 	spconn2 := prjn.NewUnifRnd() // still needs testing
-	spconn2.PCon = 0.01
+	spconn2.PCon = 0.1
 	spconn2.RndSeed = ss.RndSeed
 
 	spconn3 := prjn.NewUnifRnd()
@@ -343,6 +356,8 @@ func (ss *Sim) ConfigNet(net *leabra.Network) {
 	pj := net.ConnectLayersPrjn(inp, dg, spconn, emer.Forward, &hip.CHLPrjn{})
 	pj.SetClass("PerDGPrjn")
 
+	//pj = net.ConnectLayersPrjn(ly, ca3, spconn3, emer.Forward, &hip.CHLPrjn{})
+	//pj.SetClass("PerDGPrjn")
 	pj = net.ConnectLayersPrjn(ca3, out, conn, emer.Forward, &hip.CHLPrjn{})
 	pj.SetClass("PerCA3Prjn")
 
@@ -352,18 +367,18 @@ func (ss *Sim) ConfigNet(net *leabra.Network) {
 	pj.SetClass("PerCTXPrjn")
 	pj = net.ConnectLayersPrjn(ctx, out, conn, emer.Forward, &hip.CHLPrjn{})
 	pj.SetClass("PerCTXPrjn")
-	pj = net.ConnectLayersPrjn(out, ctx, conn, emer.Back, &hip.CHLPrjn{})
-	pj.SetClass("PerCTXPrjn")
+	//pj = net.ConnectLayersPrjn(out, ctx, conn, emer.Back, &hip.CHLPrjn{})
+	//pj.SetClass("PerCTXPrjn")
 
 	pj = net.ConnectLayersPrjn(dg, ca3, spconn2, emer.Forward, &hip.CHLPrjn{})
 	pj.SetClass("HipPrjn")
 
 	pj = net.ConnectLayersPrjn(ca3, ctx, conn, emer.Forward, &hip.CHLPrjn{})
 	pj = net.ConnectLayersPrjn(ca3, ca3, conn, emer.Lateral, &hip.CHLPrjn{})
-	pj.SetClass("PerCA3Prjn")
 
 	net.ConnectLayersPrjn(ext, inp, onetoone, emer.Forward, &hip.CHLPrjn{})
 	net.ConnectLayersPrjn(out, inp, onetoone, emer.Back, &hip.CHLPrjn{})
+	//pj.SetClass("PerCA3Prjn")
 
 	// note: can set these to do parallel threaded computation across multiple cpus
 	// not worth it for this small of a model, but definitely helps for larger ones
@@ -415,10 +430,13 @@ func (ss *Sim) Counters(state string) string { // changed from boolean to string
 	if state == "train" {
 		return fmt.Sprintf("Run:"+" "+"%d\tEpoch:"+" "+"%d\tTrial:"+" "+"%d\tCycle:"+" "+"%d\tName:"+" "+"%s\t TrialSSE:"+" "+"%.2f\t LastEpcSSE:"+" "+"%.2f\t\t\n TrainABSSE:"+" "+"%.2f\tTrainACSSE:"+" "+"%.2f\tTestABSSE:"+" "+"%.2f\tTestACSSE:"+" "+"%.2f\t\t", ss.TrainEnv.Run.Cur, ss.TrainEnv.Epoch.Cur, ss.TrainEnv.Trial.Cur, ss.Time.Cycle, fmt.Sprintf(ss.TrainEnv.TrialName.Cur), ss.TrlSSE, ss.DispAvgEpcSSE, ss.TrainABSSE, ss.TrainACSSE, ss.TestABSSE, ss.TestACSSE)
 	} else if state == "test" {
-		return fmt.Sprintf("Run:"+" "+"%d\tEpoch:"+" "+"%d\tTrial:"+" "+"%d\tCycle:"+" "+"%d\tName:"+" "+"%s\t TrialSSE:"+" "+"%.2f\t LastEpcSSE:"+" "+"%.2f\t\t\n TrainABSSE:"+" "+"%.2f\tTrainACSSE:"+" "+"%.2f\tTestABSSE:"+" "+"%.2f\tTestACSSE:"+" "+"%.2f\t\t", ss.TrainEnv.Run.Cur, ss.TrainEnv.Epoch.Cur, ss.TrainEnv.Trial.Cur, ss.Time.Cycle, fmt.Sprintf(ss.TestEnv.TrialName.Cur), ss.TrlSSE, ss.DispAvgEpcSSE, ss.TrainABSSE, ss.TrainACSSE, ss.TestABSSE, ss.TestACSSE)
+		return fmt.Sprintf("Run:"+" "+"%d\tEpoch:"+" "+"%d\tTrial:"+" "+"%d\tCycle:"+" "+"%d\tName:"+" "+"%s\t TrialSSE:"+" "+"%.2f\t LastEpcSSE:"+" "+"%.2f\t\t\n TrainABSSE:"+" "+"%.2f\tTrainACSSE:"+" "+"%.2f\tTestABSSE:"+" "+"%.2f\tTestACSSE:"+" "+"%.2f\t\t", ss.TrainEnv.Run.Cur, ss.TrainEnv.Epoch.Cur, ss.TrainEnv.Trial.Cur, ss.Time.Cycle, fmt.Sprintf(ss.TrainEnv.TrialName.Cur), ss.TrlSSE, ss.DispAvgEpcSSE, ss.TrainABSSE, ss.TrainACSSE, ss.TestABSSE, ss.TestACSSE)
 	} else if state == "sleep" {
-		return fmt.Sprintf("Run:"+" "+"%d\tEpoch:"+" "+"%d\tCycle:"+" "+"%d\tInhibFactor: "+" "+"%.6f\tAvgLaySim: "+" "+"%.10f\t\t\t\nPlusPhase:"+" "+"%t\t MinusPhase:"+" "+"%t\t NearA:"+" "+"%d\tMatchA:"+" "+"%.2f\tNearB:"+" "+"%d\tMatchB:"+" "+"%.2f\t\t\t\nNearA':"+" "+"%d\tMatchA':"+" "+"%.2f\tNearC:"+" "+"%d\tMatchC:"+" "+"%.2f\t\t\t\n", ss.TrainEnv.Run.Cur, ss.TrainEnv.Epoch.Cur, ss.Time.Cycle, ss.InhibFactor, ss.AvgLaySim,
-			ss.PlusPhase, ss.MinusPhase, ss.ClosestABA, ss.ClosestABAMatch, ss.ClosestABB, ss.ClosestABBMatch, ss.ClosestACA, ss.ClosestACAMatch, ss.ClosestACC, ss.ClosestACCMatch)
+		return fmt.Sprintf("Run:"+" "+"%d\tEpoch:"+" "+"%d\tCycle:"+" "+"%d\tInhibFactor: "+" "+"%.6f\tAvgLaySim: "+" "+"%.10f\t\t\t\nPlusPhase:"+" "+"%t\t MinusPhase:"+"" +
+			" "+"%t\t NearA:"+" "+"%d\tMatchA:"+" "+"%.2f\tNearB:"+" "+"%d\tMatchB:"+" "+"%.2f\t\t\t\nNearA':"+" "+"%d\tMatchA':"+" "+"%.2f\tNearC:"+" "+"%d\tMatchC:"+" "+"%.2f\tSlpTrls:"+" "+"%d\tSlpStage:"+" "+"%s\t\t\t\n",
+			ss.TrainEnv.Run.Cur, ss.TrainEnv.Epoch.Cur, ss.Time.Cycle, ss.InhibFactor, ss.AvgLaySim, ss.PlusPhase, ss.MinusPhase,
+			ss.ClosestABA, ss.ClosestABAMatch, ss.ClosestABB, ss.ClosestABBMatch, ss.ClosestACA, ss.ClosestACAMatch, ss.ClosestACC, ss.ClosestACCMatch, ss.SlpTrls, ss.SleepStage)
+
 	} else if state == "strucsleep" {
 		return fmt.Sprintf("Run:"+" "+"%d\tEpoch:"+" "+"%d\tTrial:"+" "+"%d\tCycle:"+" "+"%d\tName:"+" "+"%s\t InhibFactor: "+" "+"%.4f\t LastEpcSSE"+" "+"%.2f\t\t\t\t", ss.TrainEnv.Run.Cur, ss.TrainEnv.Epoch.Cur, ss.SleepEnv.Trial.Cur, ss.Time.Cycle, fmt.Sprintf(ss.SleepEnv.TrialName.Cur), ss.InhibFactor, ss.DispAvgEpcSSE)
 	}
@@ -444,7 +462,6 @@ func (ss *Sim) SleepCycInit() {
 	}
 
 	ss.Net.LayerByName("EXT").(leabra.LeabraLayer).AsLeabra().SetOff(true)
-
 	ss.Net.InitActs()
 
 	// Set all layers to random activation
@@ -470,7 +487,7 @@ func (ss *Sim) SleepCycInit() {
 	// inc and dec set the rate at which synaptic depression increases and recovers at each synapse
 	if ss.SynDep {
 		for _, ly := range ss.Net.Layers {
-			inc := 0.0007 // 0.0007
+			inc := 0.0015 // 0.0007
 			dec := 0.0005 // 0.0005
 			ly.(*leabra.Layer).InitSdEffWt(float32(inc), float32(dec))
 		}
@@ -487,17 +504,16 @@ func (ss *Sim) BackToWake() {
 	}
 
 	// Set the input/output/hidden layers back to normal.
+	ss.Net.LayerByName("EXT").(leabra.LeabraLayer).AsLeabra().SetOff(false)
 
 	ext := ss.Net.LayerByName("EXT").(leabra.LeabraLayer).AsLeabra()
-	ext.SetType(emer.Hidden)
+	ext.SetType(emer.Input)
 
 	inp := ss.Net.LayerByName("Input").(leabra.LeabraLayer).AsLeabra()
 	inp.SetType(emer.Hidden)
 
 	out := ss.Net.LayerByName("Output").(leabra.LeabraLayer).AsLeabra()
 	out.SetType(emer.Target)
-
-	ss.Net.LayerByName("EXT").(leabra.LeabraLayer).AsLeabra().SetOff(false)
 
 }
 
@@ -524,28 +540,15 @@ func (ss *Sim) AlphaCyc(train bool) {
 		ss.Net.WtFmDWt()
 	}
 
-	// Declare activation recording vars
-	var inpCycActs [][]float32
-	var outCycActs [][]float32
-	var ctxCycActs [][]float32
-	var dgCycActs [][]float32
-	var ca3CycActs [][]float32
-
-	ctx := ss.Net.LayerByName("CTX").(leabra.LeabraLayer).AsLeabra()
-	ctx.SetOff(false)
-	dg := ss.Net.LayerByName("DG").(leabra.LeabraLayer).AsLeabra()
-	dg.SetOff(true)
-	ca3 := ss.Net.LayerByName("CA3").(leabra.LeabraLayer).AsLeabra()
-	ca3.SetOff(true)
-
-	inp := ss.Net.LayerByName("Input").(leabra.LeabraLayer).AsLeabra()
-	out := ss.Net.LayerByName("Output").(leabra.LeabraLayer).AsLeabra()
+	if ss.ABZero == true && ss.ACZero == true {
+		ss.Net.LayerByName("CTX").(leabra.LeabraLayer).AsLeabra().SetOff(false)
+		ss.Net.LayerByName("DG").(leabra.LeabraLayer).AsLeabra().SetOff(true)
+		ss.Net.LayerByName("CA3").(leabra.LeabraLayer).AsLeabra().SetOff(true)
+	}
 
 	//if !train {
-	//	dg := ss.Net.LayerByName("DG").(leabra.LeabraLayer).AsLeabra()
-	//	dg.SetOff(true)
-	//	ca3 := ss.Net.LayerByName("CA3").(leabra.LeabraLayer).AsLeabra()
-	//	ca3.SetOff(true)
+	//	ss.Net.LayerByName("DG").(leabra.LeabraLayer).AsLeabra().SetOff(true)
+	//	ss.Net.LayerByName("CA3").(leabra.LeabraLayer).AsLeabra().SetOff(true)
 	//}
 
 	ss.Net.AlphaCycInit()
@@ -580,26 +583,7 @@ func (ss *Sim) AlphaCyc(train bool) {
 				}
 			}
 
-			var inpCycAct []float32
-			var outCycAct []float32
-			var ctxCycAct []float32
-			var dgCycAct []float32
-			var ca3CycAct []float32
-
-			inp.UnitVals(&inpCycAct, "Act")
-			inpCycActs = append(inpCycActs, inpCycAct)
-			out.UnitVals(&outCycAct, "Act")
-			outCycActs = append(outCycActs, outCycAct)
-
-			ctx.UnitVals(&ctxCycAct, "Act")
-			ctxCycActs = append(ctxCycActs, ctxCycAct)
-			dg.UnitVals(&dgCycAct, "Act")
-			dgCycActs = append(dgCycActs, dgCycAct)
-			ca3.UnitVals(&ca3CycAct, "Act")
-			ca3CycActs = append(ca3CycActs, ca3CycAct)
-
 		}
-
 		ss.Net.QuarterFinal(&ss.Time)
 		ss.Time.QuarterInc()
 		if ss.ViewOn {
@@ -622,89 +606,6 @@ func (ss *Sim) AlphaCyc(train bool) {
 		}
 	}
 
-	//if !train {
-	//	dg := ss.Net.LayerByName("DG").(leabra.LeabraLayer).AsLeabra()
-	//	dg.SetOff(false)
-	//	ca3 := ss.Net.LayerByName("CA3").(leabra.LeabraLayer).AsLeabra()
-	//	ca3.SetOff(false)
-	//}
-
-	//Write out here
-	if ss.TrainEnv.Run.Cur == 0 {
-		ss.DirSeed = ss.RndSeed
-	}
-
-	if !train {
-
-		dirpathacts := ("output\\" + "wake\\" + "TstActs\\" + "tstacts" + fmt.Sprint(ss.DirSeed) + "_truns_" + fmt.Sprint(ss.MaxRuns) + "_run_" + fmt.Sprint(ss.TrainEnv.Run.Cur))
-
-		if _, err := os.Stat(dirpathacts); os.IsNotExist(err) {
-			os.MkdirAll(dirpathacts, os.ModePerm)
-		}
-
-		filetstacts, _ := os.OpenFile(dirpathacts+"\\"+"tstacts"+fmt.Sprint(ss.RndSeed)+"_"+"run"+fmt.Sprint(ss.TrainEnv.Run.Cur)+"epoch"+fmt.Sprint(ss.TrainEnv.Epoch.Cur)+".csv", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		defer filetstacts.Close()
-		writertstacts := csv.NewWriter(filetstacts)
-		defer writertstacts.Flush()
-
-		if ss.TestEnv.Trial.Cur == 0 {
-			headers := []string{"Run", "Epoch", "Cycle", "TrialName"}
-
-			for i := 0; i < 50; i++ {
-				str := "INP_" + fmt.Sprint(i)
-				headers = append(headers, str)
-			}
-			for i := 0; i < 50; i++ {
-				str := "OUT_" + fmt.Sprint(i)
-				headers = append(headers, str)
-			}
-
-			for i := 0; i < 144; i++ {
-				str := "CTX_" + fmt.Sprint(i)
-				headers = append(headers, str)
-			}
-
-			for i := 0; i < 225; i++ {
-				str := "DG_" + fmt.Sprint(i)
-				headers = append(headers, str)
-			}
-
-			for i := 0; i < 144; i++ {
-				str := "CA3_" + fmt.Sprint(i)
-				headers = append(headers, str)
-			}
-			//if !ss.FinalTest{
-			writertstacts.Write(headers)
-			//}
-
-		}
-		valueStr := []string{}
-
-		for i := 0; i < 100; i++ {
-			if i == 19 || i == 74 || i == 99 {
-				valueStr := []string{fmt.Sprint(ss.TrainEnv.Run.Cur), fmt.Sprint(ss.TrainEnv.Epoch.Cur), fmt.Sprint(i), fmt.Sprint(ss.TestEnv.TrialName.Cur)}
-				for _, vals := range inpCycActs[i] {
-					valueStr = append(valueStr, fmt.Sprint(vals))
-				}
-				for _, vals := range outCycActs[i] {
-					valueStr = append(valueStr, fmt.Sprint(vals))
-				}
-				for _, vals := range ctxCycActs[i] {
-					valueStr = append(valueStr, fmt.Sprint(vals))
-				}
-				for _, vals := range dgCycActs[i] {
-					valueStr = append(valueStr, fmt.Sprint(vals))
-				}
-				for _, vals := range ca3CycActs[i] {
-					valueStr = append(valueStr, fmt.Sprint(vals))
-				}
-				writertstacts.Write(valueStr)
-			}
-		}
-		writertstacts.Write(valueStr)
-
-	}
-
 	if train {
 		ss.Net.DWt()
 	}
@@ -721,6 +622,17 @@ func (ss *Sim) AlphaCyc(train bool) {
 		ss.TstCycPlot.GoUpdate() // make sure up-to-date at end
 
 	}
+
+	if ss.TrainEnv.Run.Cur == 0 {
+		ss.DirSeed = ss.RndSeed
+	}
+
+	//if !train && ss.ABZero == true {
+	//	ss.Net.LayerByName("DG").(leabra.LeabraLayer).AsLeabra().SetOff(false)
+	//	ss.Net.LayerByName("CA3").(leabra.LeabraLayer).AsLeabra().SetOff(false)
+	//}
+
+
 }
 
 func (ss *Sim) StrucSleepAlphaCyc(train bool) {
@@ -909,6 +821,12 @@ func (ss *Sim) TrainTrial() {
 		ss.NewRun()
 	}
 
+	if ss.ABZero == false && ss.ACZero == false {
+		ss.Net.LayerByName("CTX").(leabra.LeabraLayer).AsLeabra().SetOff(false)
+		ss.Net.LayerByName("DG").(leabra.LeabraLayer).AsLeabra().SetOff(true)
+		ss.Net.LayerByName("CA3").(leabra.LeabraLayer).AsLeabra().SetOff(true)
+	}
+
 	ss.TrainEnv.Step() // the Env encapsulates and manages all counter state
 
 	// Key to query counters FIRST because current state is in NEXT epoch
@@ -922,17 +840,51 @@ func (ss *Sim) TrainTrial() {
 		if ss.TestInterval > 0 && epc%ss.TestInterval == 0 { // note: epc is *next* so won't trigger first time
 			ss.TestAll()
 
-			// Hip teaching cortex
-			if ss.TestABSSE == 0 { // Previously ss.TestABCor >= 0.66
+			learnedAB := (ss.TestABSSE == 0 && ss.TrainABSSE == 0)
+			if ss.TrainEnv.Table.Table == ss.TrainAB && learnedAB {
+				ss.ABZero = true
+				ss.TrainEnv.Table = etable.NewIdxView(ss.TrainAC)
 
-				fmt.Print("Presleep: ")
-				fmt.Println(ss.TestABCor)
-				fmt.Println(ss.TestABSSE)
-				ss.SleepTrial()
-				ss.TestAll()
-				fmt.Print("Postsleep: ")
-				fmt.Println(ss.TestABCor)
-				fmt.Println(ss.TestABSSE)
+				// All Layers on. CTX learning rate lower.
+				ss.Net.LayerByName("CTX").(leabra.LeabraLayer).AsLeabra().SetOff(false)
+				ss.Net.LayerByName("DG").(leabra.LeabraLayer).AsLeabra().SetOff(false)
+				ss.Net.LayerByName("CA3").(leabra.LeabraLayer).AsLeabra().SetOff(false)
+
+				ss.Net.LayerByName("CTX").(leabra.LeabraLayer).AsLeabra().RcvPrjns.SendName("Input").(*hip.CHLPrjn).Learn.Lrate = 0.0001
+				ss.Net.LayerByName("CTX").(leabra.LeabraLayer).AsLeabra().SndPrjns.RecvName("Output").(*hip.CHLPrjn).Learn.Lrate = 0.0001
+				//ss.Net.LayerByName("CTX").(leabra.LeabraLayer).AsLeabra().RcvPrjns.SendName("Output").(*hip.CHLPrjn).Learn.Lrate = 0.0001
+				ss.Net.LayerByName("CTX").(leabra.LeabraLayer).AsLeabra().SndPrjns.RecvName("Input").(*hip.CHLPrjn).Learn.Lrate = 0.0001
+			}
+
+			learnedAC := (ss.TestACSSE == 0 && ss.TrainACSSE == 0)
+			if ss.TrainEnv.Table.Table == ss.TrainAC && learnedAC {
+				ss.ACZero = true
+
+				for i := 0; i < 500; i++ {
+
+					ss.SleepStage = "SWS"
+					if ss.SleepStage == "SWS" {
+						ss.Net.LayerByName("DG").(*leabra.Layer).SetOff(false)
+						ss.Net.LayerByName("CA3").(*leabra.Layer).SetOff(false)
+						ss.SleepStage = "SWS"
+						ss.SleepCounter += 1
+						ss.SWSCounter += 1
+					}
+					ss.SleepTrial("SWS")
+					ss.TestAll()
+
+					ss.SleepStage = "REM"
+					if ss.SleepStage == "REM" {
+						ss.Net.LayerByName("DG").(*leabra.Layer).SetOff(true)
+						ss.Net.LayerByName("CA3").(*leabra.Layer).SetOff(true)
+						ss.SleepStage = "REM"
+						ss.SleepCounter += 1
+						ss.REMCounter += 1
+					}
+
+					ss.SleepTrial("REM")
+					ss.TestAll()
+				}
 
 				ss.RunEnd()
 
@@ -944,9 +896,10 @@ func (ss *Sim) TrainTrial() {
 					return
 				}
 
+				//learnedAB = false
 			}
 
-			//This is the version that is compatiple with AB/AC learning
+			// Checking for zero error, running an epoch of structured sleep, running another test epoch and ending run
 			//if ss.ABZero == true { // ss.TestABSSE > 0
 			//
 			//	//fmt.Println(ss.TestABSSE)
@@ -963,16 +916,35 @@ func (ss *Sim) TrainTrial() {
 			//	//return
 			//	//}
 			//}
+
+			//if ss.TestABSSE == 0 {
+			//
+			//	ss.Net.LayerByName("CTX").(leabra.LeabraLayer).AsLeabra().SetOff(false)
+			//	ss.SleepTrial()
+			//	ss.TestAll()
+			//
+			//	ss.RunEnd()
+			//
+			//	if ss.TrainEnv.Run.Incr() { // we are done!
+			//		ss.StopNow = true
+			//		return
+			//	} else {
+			//		ss.NeedsNewRun = true
+			//		return
+			//	}
+			//
+			//}
+
 		}
 
 		//learned := (ss.NZeroStop > 0 && ss.NZero >= ss.NZeroStop)
 
-		// Undo this for setting back to AB + AC Training
-		//learned := ss.TestABSSE == 0 && ss.TrainABSSE == 0
+		// This block us used for AB/AC
+		//learned := (ss.TestABSSE == 0 && ss.TrainABSSE == 0)
 		//if ss.TrainEnv.Table.Table == ss.TrainAB && learned {
 		//	ss.ABZero = true
 		//	ss.TrainEnv.Table = etable.NewIdxView(ss.TrainAC)
-		//	learned = false
+		//	//learned = false
 		//}
 
 		if epc >= ss.MaxEpcs { // ||  //(ss.NZeroStop > 0 && ss.NZero >= ss.NZeroStop) {
@@ -994,7 +966,24 @@ func (ss *Sim) TrainTrial() {
 }
 
 // SleepCyc runs one 30,000 cycle trial of spontaneous sleep
-func (ss *Sim) SleepCyc(c [][]float64) {
+func (ss *Sim) SleepCyc(c [][]float64, stage string) {
+
+
+	//if stage == "SWS" {
+	//	ss.Net.LayerByName("DG").(*leabra.Layer).SetOff(false)
+	//	ss.Net.LayerByName("CA3").(*leabra.Layer).SetOff(false)
+	//	ss.SleepStage = "SWS"
+	//	ss.SleepCounter += 1
+	//	ss.SWSCounter += 1
+	//}
+	//
+	//if stage == "REM" {
+	//	ss.Net.LayerByName("DG").(*leabra.Layer).SetOff(true)
+	//	ss.Net.LayerByName("CA3").(*leabra.Layer).SetOff(true)
+	//	ss.SleepStage = "REM"
+	//	ss.SleepCounter += 1
+	//	ss.REMCounter += 1
+	//}
 
 	viewUpdt := ss.SleepUpdt
 
@@ -1008,7 +997,6 @@ func (ss *Sim) SleepCyc(c [][]float64) {
 	inp := ss.Net.LayerByName("Input").(*leabra.Layer)
 	out := ss.Net.LayerByName("Output").(*leabra.Layer)
 	ca3 := ss.Net.LayerByName("CA3").(*leabra.Layer)
-	ctx := ss.Net.LayerByName("CTX").(*leabra.Layer)
 
 	// Recording all inhibition Gi parameters prior to sleep for the inhibitory oscillations
 	inpinhib := ss.Net.LayerByName("Input").(*leabra.Layer).Inhib.Layer.Gi
@@ -1021,18 +1009,17 @@ func (ss *Sim) SleepCyc(c [][]float64) {
 	ss.Net.InitGInc()       // scaling params change, so need to recompute all netins
 
 	// Loop for the 30,000 cycle sleep trial
-	for cyc := 0; cyc < 30000; cyc++ {
+	for cyc := 0; cyc < 50000; cyc++ {
 
 		inp.SndPrjns.RecvName("CTX").(*hip.CHLPrjn).Learn.Lrate = 0.01
 		inp.RcvPrjns.SendName("CTX").(*hip.CHLPrjn).Learn.Lrate = 0.01
 		out.RcvPrjns.SendName("CTX").(*hip.CHLPrjn).Learn.Lrate = 0.01
-		out.SndPrjns.RecvName("CTX").(*hip.CHLPrjn).Learn.Lrate = 0.01
-
-		ctx.RcvPrjns.SendName("CA3").(*hip.CHLPrjn).Learn.Lrate = 0.01
+		//out.SndPrjns.RecvName("CTX").(*hip.CHLPrjn).Learn.Lrate = 0.01
+		ca3.SndPrjns.RecvName("CTX").(*hip.CHLPrjn).Learn.Lrate = 0.01
 
 		inp.SndPrjns.RecvName("DG").(*hip.CHLPrjn).Learn.Lrate = 0.0
-		out.RcvPrjns.SendName("CA3").(*hip.CHLPrjn).Learn.Lrate = 0.0
-		ca3.RcvPrjns.SendName("CA3").(*hip.CHLPrjn).Learn.Lrate = 0.0
+		ca3.SndPrjns.RecvName("CA3").(*hip.CHLPrjn).Learn.Learn = false
+		ca3.SndPrjns.RecvName("Output").(*hip.CHLPrjn).Learn.Lrate = 0.0
 
 		ss.Net.WtFmDWt()
 
@@ -1053,25 +1040,28 @@ func (ss *Sim) SleepCyc(c [][]float64) {
 
 			// Two groups - low layers recieve lower-amplitude inhibitiory oscillations while high layers recive high-amplitude oscillations.
 			// This is done to optimize oscillations for best minus-phases
-			lowlayers := []string{"DG", "CA3", "Input", "Output",}
+			lowlayers := []string{"Input", "Output", "CTX"}
+			highlayers := []string{"DG", "CA3"}
 			for _, layer := range lowlayers {
 				ly := ss.Net.LayerByName(layer).(*leabra.Layer)
 				ly.Inhib.Layer.Gi = ly.Inhib.Layer.Gi * float32(inhibs[0][cyc])
 			}
-
-			highlayers := []string{"CTX"}
 			for _, layer := range highlayers {
 				ly := ss.Net.LayerByName(layer).(*leabra.Layer)
 				ly.Inhib.Layer.Gi = ly.Inhib.Layer.Gi * float32(inhibs[1][cyc])
 			}
-
 		}
 
 		// Average network similarity is the "stability" measure. It tracks the cycle-updated temporal auto-correlation of activation values at each layer.
 		avesim := 0.0
 		tmpsim := 0.0
 
-		lys := []string{"Input", "Output", "CTX"} // Change this for correct ALS calcs
+		lys := []string{}
+		if stage == "REM" {
+			lys = []string{"Input", "Output", "CTX"}
+		} else if stage == "SWS" {
+			lys = []string{"Input", "Output", "CTX", "DG", "CA3"}
+		}
 
 		for _, lyc := range lys {
 			ly := ss.Net.LayerByName(lyc).(*leabra.Layer)
@@ -1085,16 +1075,16 @@ func (ss *Sim) SleepCyc(c [][]float64) {
 				act := nrn.Act
 				actsum += act
 			}
-			if actsum == 0{
+			if actsum < 1 {
 				tmpsim = 0
 			}
 			avesim = avesim + tmpsim
 		}
-		ss.AvgLaySim = avesim / 3
+		ss.AvgLaySim = avesim / float64(len(lys))
 
 		//If AvgLaySim falls below 0.9 - most likely because a layer has lost all act, random noise will be injected
 		//into the network to get it going again. The first 1000 cycles are skipped to let the network initially settle into an attractor.
-		if ss.Time.Cycle > 200 && ss.AvgLaySim <= 0.8 && (ss.Time.Cycle%200 == 0 || ss.Time.Cycle%200 == 1 || ss.Time.Cycle%200 == 2 || ss.Time.Cycle%200 == 3 || ss.Time.Cycle%200 == 4) {
+		if ss.Time.Cycle > 200 && ss.AvgLaySim <= 0.8 && (ss.Time.Cycle%50 == 0 || ss.Time.Cycle%50 == 1 || ss.Time.Cycle%50 == 2 || ss.Time.Cycle%50 == 3 || ss.Time.Cycle%50 == 4) {
 			for _, ly := range ss.Net.Layers {
 				for ni := range ly.(*leabra.Layer).Neurons {
 					nrn := &ly.(*leabra.Layer).Neurons[ni]
@@ -1118,8 +1108,18 @@ func (ss *Sim) SleepCyc(c [][]float64) {
 		// Mark plus or minus phase
 		if ss.SlpLearn {
 
-			plusthresh := 0.9999955            //38129217251 + 0.0000045 // 0.000055 // 0.00006 // 9999995
-			minusthresh := plusthresh - 0.0005 // 0.000015 // 0.001 // 0.005
+			plusthresh := 0.9999              //38129217251 + 0.0000045 // 0.000055 // 0.00006 // 9999995 // 999995
+			minusthresh := plusthresh - 0.01 // 0.000015 // 0.001
+
+			if stage == "SWS"{
+				plusthresh = 0.9995
+				minusthresh = plusthresh - 0.01
+			} else if stage == "REM"{
+				plusthresh = 0.9999              //38129217251 + 0.0000045 // 0.000055 // 0.00006 // 9999995 // 999995
+				minusthresh = plusthresh - 0.01 // 0.000015 // 0.001
+			}
+
+
 
 			// Checking if stable above threshold
 			if ss.PlusPhase == false && ss.MinusPhase == false {
@@ -1140,6 +1140,7 @@ func (ss *Sim) SleepCyc(c [][]float64) {
 				for _, ly := range ss.Net.Layers {
 					ly.(leabra.LeabraLayer).AsLeabra().RunSumUpdt(true)
 				}
+				fmt.Println(cyc, "plusphase begins")
 				// Continuing plus phase
 			} else if pluscount > 0 && ss.AvgLaySim >= plusthresh && ss.PlusPhase == true {
 				pluscount++
@@ -1157,6 +1158,7 @@ func (ss *Sim) SleepCyc(c [][]float64) {
 					ly.(leabra.LeabraLayer).AsLeabra().RunSumUpdt(true)
 				}
 				pluscount = 0
+				fmt.Println(cyc, "plusphase ends; minusphase begins")
 				// Continuing minus phase
 			} else if ss.AvgLaySim >= minusthresh && ss.MinusPhase == true {
 				minuscount++
@@ -1174,7 +1176,7 @@ func (ss *Sim) SleepCyc(c [][]float64) {
 				stablecount = 0
 
 				for _, lyc := range ss.Net.Layers {
-					ss.SlpTrls++
+
 					ly := ss.Net.LayerByName(lyc.Name()).(*leabra.Layer)
 					for _, p := range ly.SndPrjns {
 						if p.IsOff() {
@@ -1183,6 +1185,8 @@ func (ss *Sim) SleepCyc(c [][]float64) {
 						p.(*hip.CHLPrjn).SlpDWt() // Weight changes occuring here
 					}
 				}
+				fmt.Println(cyc, "minusphase ends; DWt occured")
+				ss.SlpTrls++
 				// Catching the rare occasion where stabilty drops in one cycle from above the plus threshold to below the minus threshold - ending trial if this happens
 			} else if ss.AvgLaySim < minusthresh && ss.PlusPhase == true {
 				ss.PlusPhase = false
@@ -1218,13 +1222,12 @@ func (ss *Sim) SleepCyc(c [][]float64) {
 		inp.SndPrjns.RecvName("CTX").(*hip.CHLPrjn).Learn.Lrate = 0.01
 		inp.RcvPrjns.SendName("CTX").(*hip.CHLPrjn).Learn.Lrate = 0.01
 		out.RcvPrjns.SendName("CTX").(*hip.CHLPrjn).Learn.Lrate = 0.01
-		out.SndPrjns.RecvName("CTX").(*hip.CHLPrjn).Learn.Lrate = 0.01
-
-		ctx.RcvPrjns.SendName("CA3").(*hip.CHLPrjn).Learn.Lrate = 0.01
+		//out.SndPrjns.RecvName("CTX").(*hip.CHLPrjn).Learn.Lrate = 0.01
+		ca3.SndPrjns.RecvName("CTX").(*hip.CHLPrjn).Learn.Lrate = 0.01
 
 		inp.SndPrjns.RecvName("DG").(*hip.CHLPrjn).Learn.Lrate = 0.1
-		out.RcvPrjns.SendName("CA3").(*hip.CHLPrjn).Learn.Lrate = 0.1
-		ca3.RcvPrjns.SendName("CA3").(*hip.CHLPrjn).Learn.Lrate = 0.2
+		ca3.SndPrjns.RecvName("CA3").(*hip.CHLPrjn).Learn.Lrate = 0.2
+		ca3.SndPrjns.RecvName("Output").(*hip.CHLPrjn).Learn.Lrate = 0.1
 
 		var inpCycAct []float32
 		inp.UnitVals(&inpCycAct, "Act")
@@ -1233,18 +1236,47 @@ func (ss *Sim) SleepCyc(c [][]float64) {
 
 		minABA, minABB, ABAMatch, ABBMatch, minACA, minACC, ACAMatch, ACCMatch := ss.SatMatch(inpCycAct, outCycAct) // NOTE: SatMatch will only return ONE of the Pats with the lowest errors. Multiple pats may have the same error but, it only returns first one
 		//fmt.Println(inpCycAct)
-		dirpathacts := "output\\" + "sleep" + "\\" + "ReplayMatch" + "\\" + "repmatch" + fmt.Sprint(ss.RndSeed) + "_truns_" + fmt.Sprint(ss.MaxRuns) + "_run_" + fmt.Sprint(ss.TrainEnv.Run.Cur) + "\\"
+		dirpathacts := "output/" + "sleep" + "/" + "ReplayMatch" + "/" + fmt.Sprint(ss.DirSeed) + "/" + "repmatch" + fmt.Sprint(ss.RndSeed) + "_truns_" + fmt.Sprint(ss.MaxRuns) + "_run_" + fmt.Sprint(ss.TrainEnv.Run.Cur) + "/"
 
-		if _, err := os.Stat(dirpathacts); os.IsNotExist(err) {
-			os.MkdirAll(dirpathacts, os.ModePerm)
+		if _, err := os.Stat(filepath.FromSlash(dirpathacts)); os.IsNotExist(err) {
+			os.MkdirAll(filepath.FromSlash(dirpathacts), os.ModePerm)
 		}
 
-		filew, _ := os.OpenFile(dirpathacts+"\\"+"repmatch"+fmt.Sprint(ss.RndSeed)+"_"+"run"+fmt.Sprint(ss.TrainEnv.Run.Cur)+"epoch"+fmt.Sprint(ss.TrainEnv.Epoch.Cur)+".csv", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		// copying params.go to better track params associated with the run data
+		paramsdata, err := ioutil.ReadFile("params.go")
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+
+		err = ioutil.WriteFile(filepath.FromSlash("output/" + "sleep" + "/" + "ReplayMatch" + "/" + fmt.Sprint(ss.DirSeed)+"/"+"tstacts"+fmt.Sprint(ss.DirSeed)+"_"+"runs_"+fmt.Sprint(ss.MaxRuns)+"params.go"), paramsdata, 0644)
+		if err != nil {
+			fmt.Println("Error creating", dirpathacts+"/"+fmt.Sprint(ss.DirSeed)+"_"+"params.go")
+			fmt.Println(err)
+			return
+		}
+
+		mainfile, err := ioutil.ReadFile("sleep-replay-abac.go")
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+
+		err = ioutil.WriteFile(filepath.FromSlash("output/" + "sleep" + "/" + "ReplayMatch" + "/" + fmt.Sprint(ss.DirSeed)+"/"+"tstacts"+fmt.Sprint(ss.DirSeed)+"_"+"runs_"+fmt.Sprint(ss.MaxRuns)+"sleep-replay-abac.go"), mainfile, 0644)
+		if err != nil {
+			fmt.Println("Error creating", dirpathacts+"/"+fmt.Sprint(ss.DirSeed)+"_"+"params.go")
+			fmt.Println(err)
+			return
+		}
+
+
+		filew, _ := os.OpenFile(filepath.FromSlash(dirpathacts+"/" + "repmatch"+fmt.Sprint(ss.RndSeed)+"_"+"run"+fmt.Sprint(ss.TrainEnv.Run.Cur)+"epoch"+fmt.Sprint(ss.TrainEnv.Epoch.Cur)+
+			"_"+"stage-"+fmt.Sprint(ss.SleepStage)+"slpblk_"+fmt.Sprint(ss.SleepCounter)+".csv"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		defer filew.Close()
 		writerw := csv.NewWriter(filew)
 		defer writerw.Flush()
 
-		headers := []string{"Epoch", "PlusPhase", "MinusPhase", "NearA", "AMatch", "NearB", "BMatch", "NearA'", "A'Match", "NearC", "CMatch"}
+		headers := []string{"Run", "Epoch", "SlpCounter", "PlusPhase", "MinusPhase", "NearA", "AMatch", "NearB", "BMatch", "NearA'", "A'Match", "NearC", "CMatch", "SlpTrl"}
 
 		if ss.Time.Cycle == 1 {
 			writerw.Write(headers)
@@ -1253,11 +1285,12 @@ func (ss *Sim) SleepCyc(c [][]float64) {
 
 		valueStr := []string{}
 
-		valueStr = append(valueStr, fmt.Sprint(ss.TrainEnv.Epoch.Cur), fmt.Sprint(ss.PlusPhase), fmt.Sprint(ss.MinusPhase), fmt.Sprint(minABA), fmt.Sprint(ABAMatch), fmt.Sprint(minABB), fmt.Sprint(ABBMatch),
-			fmt.Sprint(minACA), fmt.Sprint(ACAMatch), fmt.Sprint(minACC), fmt.Sprint(ACCMatch))
+		valueStr = append(valueStr,fmt.Sprint(ss.TrainEnv.Run.Cur), fmt.Sprint(ss.TrainEnv.Epoch.Cur), fmt.Sprint(ss.SleepCounter), fmt.Sprint(ss.PlusPhase), fmt.Sprint(ss.MinusPhase), fmt.Sprint(minABA), fmt.Sprint(ABAMatch), fmt.Sprint(minABB), fmt.Sprint(ABBMatch),
+			fmt.Sprint(minACA), fmt.Sprint(ACAMatch), fmt.Sprint(minACC), fmt.Sprint(ACCMatch), fmt.Sprint(ss.SlpTrls))
 
 		writerw.Write(valueStr)
 		writerw.Flush()
+
 	}
 
 	// Reset sleep algorithm variables
@@ -1282,7 +1315,7 @@ func (ss *Sim) SleepCyc(c [][]float64) {
 }
 
 // NOTE: SatMatch will only return ONE of the Pats with the lowest errors. Multiple pats may have the same error but, it only returns first one
-func (ss *Sim) SatMatch(inpact, outact []float32) (int, int, float32, float32, int, int, float32, float32) {
+func (ss *Sim) SatMatch(inpact, outact []float32) (int, int, float32, float32, int, int, float32, float32) { // this has bugs! need to fix
 
 	file, err := os.Open("ABPats_nohead.tsv")
 	if err != nil {
@@ -1330,15 +1363,15 @@ func (ss *Sim) SatMatch(inpact, outact []float32) (int, int, float32, float32, i
 		}
 	}
 
-	ABAerrors := []int{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+	ABAerrors := []int{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 	minABA := 0
 
-	ABBerrors := []int{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+	ABBerrors := []int{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 	minABB := 0
 
-	for j := 0; j < 14; j++ {
+	for j := 0; j < 10; j++ {
 		diff := []int{}
-		for i, val := range ABpatterns[j][:50] {
+		for i, val := range ABpatterns[j][:120] {
 			valint, _ := strconv.Atoi(val)
 			diff = append(diff, int(math.Abs(float64(valint-inpbin[i]))))
 		}
@@ -1352,9 +1385,9 @@ func (ss *Sim) SatMatch(inpact, outact []float32) (int, int, float32, float32, i
 		}
 	}
 
-	for j := 0; j < 14; j++ {
+	for j := 0; j < 10; j++ {
 		diff := []int{}
-		for i, val := range ABpatterns[j][50:] {
+		for i, val := range ABpatterns[j][120:] {
 			valint, _ := strconv.Atoi(val)
 			diff = append(diff, int(math.Abs(float64(valint-outbin[i]))))
 		}
@@ -1368,15 +1401,15 @@ func (ss *Sim) SatMatch(inpact, outact []float32) (int, int, float32, float32, i
 		}
 	}
 
-	ACAerrors := []int{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+	ACAerrors := []int{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 	minACA := 0
 
-	ACCerrors := []int{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+	ACCerrors := []int{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 	minACC := 0
 
-	for j := 0; j < 14; j++ {
+	for j := 0; j < 10; j++ {
 		diff := []int{}
-		for i, val := range ACpatterns[j][:50] {
+		for i, val := range ACpatterns[j][:120] {
 			valint, _ := strconv.Atoi(val)
 			diff = append(diff, int(math.Abs(float64(valint-inpbin[i]))))
 		}
@@ -1390,9 +1423,9 @@ func (ss *Sim) SatMatch(inpact, outact []float32) (int, int, float32, float32, i
 		}
 	}
 
-	for j := 0; j < 14; j++ {
+	for j := 0; j < 10; j++ {
 		diff := []int{}
-		for i, val := range ACpatterns[j][50:] {
+		for i, val := range ACpatterns[j][120:] {
 			valint, _ := strconv.Atoi(val)
 			diff = append(diff, int(math.Abs(float64(valint-outbin[i]))))
 		}
@@ -1407,31 +1440,31 @@ func (ss *Sim) SatMatch(inpact, outact []float32) (int, int, float32, float32, i
 	}
 
 	ss.ClosestABA = minABA
-	ss.ClosestABAMatch = 1 - float32(ABAerrors[minABA])/10
+	ss.ClosestABAMatch = 1 - float32(ABAerrors[minABA])/14
 
 	ss.ClosestABB = minABB
-	ss.ClosestABBMatch = 1 - float32(ABBerrors[minABB])/10
+	ss.ClosestABBMatch = 1 - float32(ABBerrors[minABB])/14
 
 	ss.ClosestACA = minACA
-	ss.ClosestACAMatch = 1 - float32(ACAerrors[minACA])/10
+	ss.ClosestACAMatch = 1 - float32(ACAerrors[minACA])/14
 
 	ss.ClosestACC = minACC
-	ss.ClosestACCMatch = 1 - float32(ACCerrors[minACC])/10
+	ss.ClosestACCMatch = 1 - float32(ACCerrors[minACC])/14
 
-	return minABA, minABB, 1 - float32(ABAerrors[minABA])/10, 1 - float32(ABBerrors[minABB])/10,
-		minACA, minACC, 1 - float32(ACAerrors[minACA])/10, 1 - float32(ACCerrors[minACC])/10
+	return minABA, minABB, 1 - float32(ABAerrors[minABA])/14, 1 - float32(ABBerrors[minABB])/14,
+		minACA, minACC, 1 - float32(ACAerrors[minACA])/14, 1 - float32(ACCerrors[minACC])/14
 
 }
 
 // SleepTrial sets up one spontaneous sleep trial
-func (ss *Sim) SleepTrial() {
+func (ss *Sim) SleepTrial(stage string) {
 	ss.SleepCycInit()
 	ss.UpdateView("sleep")
 
 	// DS added for inhib oscill
 	c := make([][]float64, 2)
-	HighOscillAmp := 0.05 // 0.1
-	LowOscillAmp := 0.005 // 0.07
+	HighOscillAmp := 0.1 // 0.1
+	LowOscillAmp := 0.05 // 0.07
 	OscillPeriod := 50.
 	OscillMidline := 1.0
 
@@ -1440,7 +1473,7 @@ func (ss *Sim) SleepTrial() {
 		c[0] = append(c[0], LowOscillAmp*math.Sin(2*3.14/OscillPeriod*float64(i))+OscillMidline)  // low
 		c[1] = append(c[1], HighOscillAmp*math.Sin(2*3.14/OscillPeriod*float64(i))+OscillMidline) // high
 	}
-	ss.SleepCyc(c)
+	ss.SleepCyc(c, stage)
 	ss.SlpCycPlot.GoUpdate()
 	ss.BackToWake()
 }
@@ -1664,19 +1697,42 @@ func (ss *Sim) TestAll() {
 		}
 	}
 	//ss.TestEnv.Init(ss.TrainEnv.Run.Cur)
-	dirpathacts := "output\\" + "wake\\" + "TstSSE\\" + "tstsse" + fmt.Sprint(ss.RndSeed) + "_truns_" + fmt.Sprint(ss.MaxRuns) + "_run_" + fmt.Sprint(ss.TrainEnv.Run.Cur) + "\\"
+	dirpathacts := ("output/" + "wake" + "/" + fmt.Sprint(ss.DirSeed) + "/" + "tstsse" + fmt.Sprint(ss.RndSeed) + "_truns_" + fmt.Sprint(ss.MaxRuns) + "_run_" + fmt.Sprint(ss.TrainEnv.Run.Cur) + "/")
 
-	if _, err := os.Stat(dirpathacts); os.IsNotExist(err) {
-		os.MkdirAll(dirpathacts, os.ModePerm)
+	if _, err := os.Stat(filepath.FromSlash(dirpathacts)); os.IsNotExist(err) {
+		os.MkdirAll(filepath.FromSlash(dirpathacts), os.ModePerm)
 	}
 
-	//filelrnacts, _ := os.OpenFile(dirpathacts+"epc_"+fmt.Sprint(ss.TrainEnv.Epoch.Cur)+".csv", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	//defer filelrnacts.Close()
+	// copying params.go to better track params associated with the run data
+	paramsdata, err := ioutil.ReadFile("params.go")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 
-	//filelrnacts, _ := os.OpenFile(dirpathacts+"\\"+"lrnacts"+fmt.Sprint(ss.RndSeed)+"_"+"run"+fmt.Sprint(ss.TrainEnv.Run.Cur)+"epoch"+fmt.Sprint(ss.TrainEnv.Epoch.Cur)+".csv", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	//defer filelrnacts.Close()
+	err = ioutil.WriteFile(filepath.FromSlash("output/" + "wake" + "/" + fmt.Sprint(ss.DirSeed) +"/"+"tstacts"+fmt.Sprint(ss.DirSeed)+"_"+"runs_"+fmt.Sprint(ss.MaxRuns)+"params.go"), paramsdata, 0644)
+	if err != nil {
+		fmt.Println("Error creating", dirpathacts+"/"+fmt.Sprint(ss.DirSeed)+"_"+"params.go")
+		fmt.Println(err)
+		return
+	}
 
-	ss.TstTrlLog.SaveCSV(gi.FileName(dirpathacts+fmt.Sprint(ss.RndSeed)+"_"+"run"+fmt.Sprint(ss.TrainEnv.Run.Cur)+"epoch"+fmt.Sprint(ss.TrainEnv.Epoch.Cur)+".csv"), etable.Comma, true)
+	mainfile, err := ioutil.ReadFile("sleep-replay-abac.go")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	err = ioutil.WriteFile(("output/" + "wake" + "/" + fmt.Sprint(ss.DirSeed) +"/"+"tstacts"+fmt.Sprint(ss.DirSeed)+"_"+"runs_"+fmt.Sprint(ss.MaxRuns)+"sleep-replay-abac.go"), mainfile, 0644)
+	if err != nil {
+		fmt.Println("Error creating", dirpathacts+"/"+fmt.Sprint(ss.DirSeed)+"_"+"params.go")
+		fmt.Println(err)
+		return
+	}
+
+	ss.TstTrlLog.SaveCSV(gi.FileName(filepath.FromSlash(dirpathacts+fmt.Sprint(ss.RndSeed)+"_"+"run"+fmt.Sprint(ss.TrainEnv.Run.Cur)+"epoch"+fmt.Sprint(ss.TrainEnv.Epoch.Cur)+
+		"_"+"poststage-"+fmt.Sprint(ss.SleepStage)+"slpblk_"+fmt.Sprint(ss.SleepCounter)+".csv")), etable.Comma, true)
+
 	// log only at very end
 	ss.LogTstEpc(ss.TstEpcLog)
 }
@@ -1768,8 +1824,8 @@ func (ss *Sim) OpenPat(dt *etable.Table, fname, name, desc string) {
 }
 
 func (ss *Sim) OpenPats() {
-	ss.OpenPat(ss.TrainAB, "ABPats.tsv", "TrainAB", "AB Training Patterns")
-	ss.OpenPat(ss.TrainAC, "ACPats.tsv", "TrainAC", "AC Training Patterns")
+	ss.OpenPat(ss.TrainAB, "io2.txt", "TrainAB", "AB Training Patterns")
+	ss.OpenPat(ss.TrainAC, "io2_AC.txt", "TrainAC", "AC Training Patterns")
 	//ss.OpenPat(ss.TestAB, "io2.txt", "TestAB", "AB Testing Patterns")
 	//ss.OpenPat(ss.TestAC, "io2_AC.txt", "TestAC", "AC Testing Patterns")
 }
@@ -1834,7 +1890,7 @@ func (ss *Sim) LogTrnTrl(dt *etable.Table) {
 	dt.SetCellFloat("Run", row, float64(ss.TrainEnv.Run.Cur))
 	dt.SetCellFloat("Epoch", row, float64(epc))
 	dt.SetCellFloat("Trial", row, float64(trl))
-	dt.SetCellString("TrialName", row, ss.TrainEnv.TrialName.Cur)
+	dt.SetCellString("TrialName", row, (ss.TrainEnv.TrialName.Cur))
 	dt.SetCellFloat("SSE", row, ss.TrlSSE)
 	dt.SetCellFloat("AvgSSE", row, ss.TrlAvgSSE)
 	dt.SetCellFloat("CosDiff", row, ss.TrlCosDiff)
@@ -2181,6 +2237,9 @@ func (ss *Sim) LogTstEpc(dt *etable.Table) {
 	dt.SetCellFloat("PctErr", row, agg.Mean(tix, "Err")[0])
 	dt.SetCellFloat("PctCor", row, 1-agg.Mean(tix, "Err")[0])
 	dt.SetCellFloat("CosDiff", row, agg.Mean(tix, "CosDiff")[0])
+	dt.SetCellFloat("SlpTrls", row, float64(ss.SlpTrls))
+	dt.SetCellString("PostSlpStg", row, ss.SleepStage)
+
 	ss.DispAvgEpcSSE = agg.Sum(tix, "SSE")[0] / nt
 	ss.UpdateView("test")
 
@@ -2202,8 +2261,8 @@ func (ss *Sim) LogTstEpc(dt *etable.Table) {
 	// DS Added
 	ss.TestABSSE = ss.TstStats.CellFloat("SSE", 0)
 	ss.TestACSSE = ss.TstStats.CellFloat("SSE", 1)
-
 	ss.TestABCor = 1 - ss.TstStats.CellFloat("Err", 0) // This is the AB Error
+	ss.TestACCor = 1 - ss.TstStats.CellFloat("Err", 1) // This is the AC Error
 
 	trlix := etable.NewIdxView(trl)
 	trlix.Filter(func(et *etable.Table, row int) bool {
@@ -2238,6 +2297,8 @@ func (ss *Sim) ConfigTstEpcLog(dt *etable.Table) {
 		{"PctErr", etensor.FLOAT64, nil, nil},
 		{"PctCor", etensor.FLOAT64, nil, nil},
 		{"CosDiff", etensor.FLOAT64, nil, nil},
+		{"SlpTrls", etensor.FLOAT64, nil, nil},
+		{"PostSlpStg", etensor.STRING, nil, nil},
 	}
 	for _, tn := range ss.TstNms {
 		for _, ts := range ss.TstStatNms {
@@ -2261,10 +2322,6 @@ func (ss *Sim) ConfigTstEpcPlot(plt *eplot.Plot2D, dt *etable.Table) *eplot.Plot
 	plt.SetColParams("CosDiff", eplot.Off, eplot.FixMin, 0, eplot.FixMax, 1)
 	plt.SetColParams("AB SSE", eplot.On, eplot.FixMin, 0, eplot.FloatMax, 0)
 	plt.SetColParams("AC SSE", eplot.On, eplot.FixMin, 0, eplot.FloatMax, 0)
-
-	plt.SetColParams("AB SSE", eplot.On, eplot.FixMin, 0, eplot.FloatMax, 0)
-	plt.SetColParams("AC SSE", eplot.On, eplot.FixMin, 0, eplot.FloatMax, 0)
-
 	return plt
 }
 
@@ -2634,7 +2691,7 @@ func (ss *Sim) ConfigGui() *gi.Window {
 		if !ss.IsRunning {
 			ss.IsRunning = true
 			tbar.UpdateActions()
-			go ss.SleepTrial()
+			go ss.SleepTrial("SWS") //SWS for now but change later
 		}
 	})
 

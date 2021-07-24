@@ -1,4 +1,4 @@
-module sleep-replay-abac2
+module sleep-replay-abac
 
 go 1.13
 
