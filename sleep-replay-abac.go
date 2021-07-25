@@ -877,6 +877,19 @@ func (ss *Sim) TrainTrial() {
 						" ABCor: " + fmt.Sprint(ss.TestABCor) + " ABSSE: " + fmt.Sprint(ss.TestABSSE)+
 						" ACCor: " + fmt.Sprint(ss.TestACCor) + " ACSSE: " + fmt.Sprint(ss.TestACSSE))
 
+					filew, _ := os.OpenFile(filepath.FromSlash("res" +".csv"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+					defer filew.Close()
+					writerw := csv.NewWriter(filew)
+					defer writerw.Flush()
+
+					valueStr := []string{}
+
+					valueStr = append(valueStr, "SlpCounter: " + fmt.Sprint(ss.SleepCounter) + " SlpStage: " + fmt.Sprint(ss.SleepStage)+ " SlpTrls: " + fmt.Sprint(ss.SlpTrls)+
+						" ABCor: " + fmt.Sprint(ss.TestABCor) + " ABSSE: " + fmt.Sprint(ss.TestABSSE)+
+						" ACCor: " + fmt.Sprint(ss.TestACCor) + " ACSSE: " + fmt.Sprint(ss.TestACSSE))
+
+					writerw.Write(valueStr)
+					writerw.Flush()
 					//ss.SleepStage = "REM"
 					//if ss.SleepStage == "REM" {
 					//	ss.Net.LayerByName("DG").(*leabra.Layer).SetOff(true)
