@@ -111,7 +111,7 @@ var SavedParamsSets = params.Sets{
 				}},
 			{Sel: "#Output", Desc: "All Per layers",
 				Params: params.Params{
-					"Layer.Inhib.Layer.Gi": "3",
+					"Layer.Inhib.Layer.Gi": "2.9",
 				}},
 			{Sel: "#CTX", Desc: "low inhibition",
 				Params: params.Params{

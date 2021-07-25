@@ -487,7 +487,7 @@ func (ss *Sim) SleepCycInit() {
 	// inc and dec set the rate at which synaptic depression increases and recovers at each synapse
 	if ss.SynDep {
 		for _, ly := range ss.Net.Layers {
-			inc := 0.0015 // 0.0007
+			inc := 0.001 // 0.0007
 			dec := 0.0005 // 0.0005
 			ly.(*leabra.Layer).InitSdEffWt(float32(inc), float32(dec))
 		}
