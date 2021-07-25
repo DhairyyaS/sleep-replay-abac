@@ -873,17 +873,27 @@ func (ss *Sim) TrainTrial() {
 					ss.SleepTrial("SWS")
 					ss.TestAll()
 
-					ss.SleepStage = "REM"
-					if ss.SleepStage == "REM" {
-						ss.Net.LayerByName("DG").(*leabra.Layer).SetOff(true)
-						ss.Net.LayerByName("CA3").(*leabra.Layer).SetOff(true)
-						ss.SleepStage = "REM"
-						ss.SleepCounter += 1
-						ss.REMCounter += 1
-					}
+					fmt.Println("SlpCounter: " + fmt.Sprint(ss.SleepCounter) + " SlpStage: " + fmt.Sprint(ss.SleepStage)+ " SlpTrls: " + fmt.Sprint(ss.SlpTrls)+
+						" ABCor: " + fmt.Sprint(ss.TestABCor) + " ABSSE: " + fmt.Sprint(ss.TestABSSE)+
+						" ACCor: " + fmt.Sprint(ss.TestACCor) + " ACSSE: " + fmt.Sprint(ss.TestACSSE))
 
-					ss.SleepTrial("REM")
-					ss.TestAll()
+					//ss.SleepStage = "REM"
+					//if ss.SleepStage == "REM" {
+					//	ss.Net.LayerByName("DG").(*leabra.Layer).SetOff(true)
+					//	ss.Net.LayerByName("CA3").(*leabra.Layer).SetOff(true)
+					//	ss.SleepStage = "REM"
+					//	ss.SleepCounter += 1
+					//	ss.REMCounter += 1
+					//}
+					//
+					//ss.SleepTrial("REM")
+					//ss.TestAll()
+
+					//fmt.Println("SlpCounter: " + fmt.Sprint(ss.SleepCounter) + " SlpStage: " + fmt.Sprint(ss.SleepStage)+ " SlpTrls: " + fmt.Sprint(ss.SlpTrls)+
+					//	" ABCor: " + fmt.Sprint(ss.TestABCor) + " ABSSE: " + fmt.Sprint(ss.TestABSSE)+
+					//	" ACCor: " + fmt.Sprint(ss.TestACCor) + " ACSSE: " + fmt.Sprint(ss.TestACSSE))
+
+
 				}
 
 				ss.RunEnd()
@@ -1140,7 +1150,7 @@ func (ss *Sim) SleepCyc(c [][]float64, stage string) {
 				for _, ly := range ss.Net.Layers {
 					ly.(leabra.LeabraLayer).AsLeabra().RunSumUpdt(true)
 				}
-				fmt.Println(cyc, "plusphase begins")
+				//fmt.Println(cyc, "plusphase begins")
 				// Continuing plus phase
 			} else if pluscount > 0 && ss.AvgLaySim >= plusthresh && ss.PlusPhase == true {
 				pluscount++
@@ -1158,7 +1168,7 @@ func (ss *Sim) SleepCyc(c [][]float64, stage string) {
 					ly.(leabra.LeabraLayer).AsLeabra().RunSumUpdt(true)
 				}
 				pluscount = 0
-				fmt.Println(cyc, "plusphase ends; minusphase begins")
+				//fmt.Println(cyc, "plusphase ends; minusphase begins")
 				// Continuing minus phase
 			} else if ss.AvgLaySim >= minusthresh && ss.MinusPhase == true {
 				minuscount++
@@ -1185,7 +1195,7 @@ func (ss *Sim) SleepCyc(c [][]float64, stage string) {
 						p.(*hip.CHLPrjn).SlpDWt() // Weight changes occuring here
 					}
 				}
-				fmt.Println(cyc, "minusphase ends; DWt occured")
+				//fmt.Println(cyc, "minusphase ends; DWt occured")
 				ss.SlpTrls++
 				// Catching the rare occasion where stabilty drops in one cycle from above the plus threshold to below the minus threshold - ending trial if this happens
 			} else if ss.AvgLaySim < minusthresh && ss.PlusPhase == true {
