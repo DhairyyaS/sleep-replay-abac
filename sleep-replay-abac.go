@@ -915,6 +915,7 @@ func (ss *Sim) TrainTrial() {
 						" ABCor: " + fmt.Sprint(ss.TestABCor) + " ABSSE: " + fmt.Sprint(ss.TestABSSE) +
 						" ACCor: " + fmt.Sprint(ss.TestACCor) + " ACSSE: " + fmt.Sprint(ss.TestACSSE))
 
+					valueStr = []string{}
 					valueStr = append(valueStr, "SlpCounter: " + fmt.Sprint(ss.SleepCounter) + " SlpStage: " + fmt.Sprint(ss.SleepStage)+ " SlpTrls: " + fmt.Sprint(ss.SlpTrls)+
 						" ABCor: " + fmt.Sprint(ss.TestABCor) + " ABSSE: " + fmt.Sprint(ss.TestABSSE)+
 						" ACCor: " + fmt.Sprint(ss.TestACCor) + " ACSSE: " + fmt.Sprint(ss.TestACSSE))
