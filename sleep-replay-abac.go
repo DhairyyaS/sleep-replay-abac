@@ -363,8 +363,8 @@ func (ss *Sim) ConfigNet(net *leabra.Network) {
 
 	pj = net.ConnectLayersPrjn(inp, ctx, conn, emer.Forward, &hip.CHLPrjn{})
 	pj.SetClass("PerCTXPrjn")
-	pj = net.ConnectLayersPrjn(ctx, inp, conn, emer.Back, &hip.CHLPrjn{})
-	pj.SetClass("PerCTXPrjn")
+	//pj = net.ConnectLayersPrjn(ctx, inp, conn, emer.Back, &hip.CHLPrjn{})
+	//pj.SetClass("PerCTXPrjn")
 	pj = net.ConnectLayersPrjn(ctx, out, conn, emer.Forward, &hip.CHLPrjn{})
 	pj.SetClass("PerCTXPrjn")
 	//pj = net.ConnectLayersPrjn(out, ctx, conn, emer.Back, &hip.CHLPrjn{})
@@ -487,7 +487,7 @@ func (ss *Sim) SleepCycInit() {
 	// inc and dec set the rate at which synaptic depression increases and recovers at each synapse
 	if ss.SynDep {
 		for _, ly := range ss.Net.Layers {
-			inc := 0.0009 // 0.0007
+			inc := 0.0007 // 0.0007
 			dec := 0.0005 // 0.0005
 			ly.(*leabra.Layer).InitSdEffWt(float32(inc), float32(dec))
 		}
@@ -852,7 +852,7 @@ func (ss *Sim) TrainTrial() {
 				ss.Net.LayerByName("CTX").(leabra.LeabraLayer).AsLeabra().RcvPrjns.SendName("Input").(*hip.CHLPrjn).Learn.Lrate = 0.0001
 				ss.Net.LayerByName("CTX").(leabra.LeabraLayer).AsLeabra().SndPrjns.RecvName("Output").(*hip.CHLPrjn).Learn.Lrate = 0.0001
 				//ss.Net.LayerByName("CTX").(leabra.LeabraLayer).AsLeabra().RcvPrjns.SendName("Output").(*hip.CHLPrjn).Learn.Lrate = 0.0001
-				ss.Net.LayerByName("CTX").(leabra.LeabraLayer).AsLeabra().SndPrjns.RecvName("Input").(*hip.CHLPrjn).Learn.Lrate = 0.0001
+				//ss.Net.LayerByName("CTX").(leabra.LeabraLayer).AsLeabra().SndPrjns.RecvName("Input").(*hip.CHLPrjn).Learn.Lrate = 0.0001
 			}
 
 			//learnedAC := true
@@ -899,29 +899,29 @@ func (ss *Sim) TrainTrial() {
 					writerw.Write(valueStr)
 					writerw.Flush()
 
-					ss.SleepStage = "REM"
-					if ss.SleepStage == "REM" {
-						ss.Net.LayerByName("DG").(*leabra.Layer).SetOff(true)
-						ss.Net.LayerByName("CA3").(*leabra.Layer).SetOff(true)
-						ss.SleepStage = "REM"
-						ss.SleepCounter += 1
-						ss.REMCounter += 1
-					}
+					// ss.SleepStage = "REM"
+					// if ss.SleepStage == "REM" {
+					// 	ss.Net.LayerByName("DG").(*leabra.Layer).SetOff(true)
+					// 	ss.Net.LayerByName("CA3").(*leabra.Layer).SetOff(true)
+					// 	ss.SleepStage = "REM"
+					// 	ss.SleepCounter += 1
+					// 	ss.REMCounter += 1
+					// }
 
-					ss.SleepTrial("REM")
-					ss.TestAll()
+					// ss.SleepTrial("REM")
+					// ss.TestAll()
 
-					fmt.Println("SlpCounter: " + fmt.Sprint(ss.SleepCounter) + " SlpStage: " + fmt.Sprint(ss.SleepStage) + " SlpTrls: " + fmt.Sprint(ss.SlpTrls) +
-						" ABCor: " + fmt.Sprint(ss.TestABCor) + " ABSSE: " + fmt.Sprint(ss.TestABSSE) +
-						" ACCor: " + fmt.Sprint(ss.TestACCor) + " ACSSE: " + fmt.Sprint(ss.TestACSSE))
+					// fmt.Println("SlpCounter: " + fmt.Sprint(ss.SleepCounter) + " SlpStage: " + fmt.Sprint(ss.SleepStage) + " SlpTrls: " + fmt.Sprint(ss.SlpTrls) +
+					// 	" ABCor: " + fmt.Sprint(ss.TestABCor) + " ABSSE: " + fmt.Sprint(ss.TestABSSE) +
+					// 	" ACCor: " + fmt.Sprint(ss.TestACCor) + " ACSSE: " + fmt.Sprint(ss.TestACSSE))
 
-					valueStr = []string{}
-					valueStr = append(valueStr, "SlpCounter: " + fmt.Sprint(ss.SleepCounter) + " SlpStage: " + fmt.Sprint(ss.SleepStage)+ " SlpTrls: " + fmt.Sprint(ss.SlpTrls)+
-						" ABCor: " + fmt.Sprint(ss.TestABCor) + " ABSSE: " + fmt.Sprint(ss.TestABSSE)+
-						" ACCor: " + fmt.Sprint(ss.TestACCor) + " ACSSE: " + fmt.Sprint(ss.TestACSSE))
+					// valueStr = []string{}
+					// valueStr = append(valueStr, "SlpCounter: " + fmt.Sprint(ss.SleepCounter) + " SlpStage: " + fmt.Sprint(ss.SleepStage)+ " SlpTrls: " + fmt.Sprint(ss.SlpTrls)+
+					// 	" ABCor: " + fmt.Sprint(ss.TestABCor) + " ABSSE: " + fmt.Sprint(ss.TestABSSE)+
+					// 	" ACCor: " + fmt.Sprint(ss.TestACCor) + " ACSSE: " + fmt.Sprint(ss.TestACSSE))
 
-					writerw.Write(valueStr)
-					writerw.Flush()
+					// writerw.Write(valueStr)
+					// writerw.Flush()
 				}
 
 				ss.ABZero = false
@@ -1058,7 +1058,7 @@ func (ss *Sim) SleepCyc(c [][]float64, stage string) {
 	for cyc := 0; cyc < 30000; cyc++ {
 
 		inp.SndPrjns.RecvName("CTX").(*hip.CHLPrjn).Learn.Lrate = 0.01
-		inp.RcvPrjns.SendName("CTX").(*hip.CHLPrjn).Learn.Lrate = 0.01
+		//inp.RcvPrjns.SendName("CTX").(*hip.CHLPrjn).Learn.Lrate = 0.01
 		out.RcvPrjns.SendName("CTX").(*hip.CHLPrjn).Learn.Lrate = 0.01
 		//out.SndPrjns.RecvName("CTX").(*hip.CHLPrjn).Learn.Lrate = 0.01
 		ca3.SndPrjns.RecvName("CTX").(*hip.CHLPrjn).Learn.Lrate = 0.01
@@ -1158,11 +1158,11 @@ func (ss *Sim) SleepCyc(c [][]float64, stage string) {
 			minusthresh := plusthresh - 0.01 // 0.000015 // 0.001
 
 			if stage == "SWS" {
-				plusthresh = 0.9999
+				plusthresh = 0.9995
 				minusthresh = plusthresh - 0.01
 			} else if stage == "REM" {
-				plusthresh = 0.9999              //38129217251 + 0.0000045 // 0.000055 // 0.00006 // 9999995 // 999995
-				minusthresh = plusthresh - 0.01 // 0.000015 // 0.001
+				plusthresh = 0.999995              //38129217251 + 0.0000045 // 0.000055 // 0.00006 // 9999995 // 999995
+				minusthresh = plusthresh - 0.005 // 0.000015 // 0.001 // 0.01
 			}
 
 			// Checking if stable above threshold
@@ -1264,7 +1264,7 @@ func (ss *Sim) SleepCyc(c [][]float64, stage string) {
 		}
 
 		inp.SndPrjns.RecvName("CTX").(*hip.CHLPrjn).Learn.Lrate = 0.01
-		inp.RcvPrjns.SendName("CTX").(*hip.CHLPrjn).Learn.Lrate = 0.01
+		//inp.RcvPrjns.SendName("CTX").(*hip.CHLPrjn).Learn.Lrate = 0.01
 		out.RcvPrjns.SendName("CTX").(*hip.CHLPrjn).Learn.Lrate = 0.01
 		//out.SndPrjns.RecvName("CTX").(*hip.CHLPrjn).Learn.Lrate = 0.01
 		ca3.SndPrjns.RecvName("CTX").(*hip.CHLPrjn).Learn.Lrate = 0.01
@@ -1526,7 +1526,7 @@ func (ss *Sim) SleepTrial(stage string) {
 	// DS added for inhib oscill
 	c := make([][]float64, 2)
 	HighOscillAmp := 0.1 // 0.1
-	LowOscillAmp := 0.03 // 0.07
+	LowOscillAmp := 0.05 // 0.07
 	OscillPeriod := 50.
 	OscillMidline := 1.0
 
